@@ -1,46 +1,26 @@
 #pragma once
 
-/*
-TODO: убрать заголовки! добавить необходимые traits
-*/
+#include ".\kbasic.h"
 
-#include <utility.h>
+#include ".\traits.h"
+#include ".\utility.h"
 
-//common code library
-using ccl = std; //для отладки можно заменить собственные traits и тп на std
+namespace ccl
+{
 
-// TODO: доопределить
-
-
-#ifndef NT_SUCCESS
-typedef long NTSTATUS;
-#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
-#endif
-
-#ifndef STATUS_UNSUCCESSFUL
-#define STATUS_UNSUCCESSFUL              ((NTSTATUS)0xC0000001L)
-#endif
-
-#ifndef STATUS_INSUFFICIENT_RESOURCES
-#define STATUS_INSUFFICIENT_RESOURCES    ((NTSTATUS)0xC000009AL)     // ntsubauth
-#endif
-
-#ifndef STATUS_SUCCESS
-#define STATUS_SUCCESS                   ((NTSTATUS)0x00000000L)    // ntsubauth
-#endif
-
-#ifndef STATUS_INVALID_PARAMETER
-#define STATUS_INVALID_PARAMETER         ((NTSTATUS)0xC000000DL)    // winnt
-#endif
-
-
-
-
-
+namespace memory
+{
 
 //============================================================================================================
 //	базовые шаблоны выделения и освобождения памяти 
 //============================================================================================================
+
+template<
+    typename _T
+>
+void releaser(_T* ptr) {
+    // TODO: еализовать функцию удаления объект
+}
 
 //------------------------------------------------------------------------------------------------------------
 //	простой шаблон менеджера памяти (реализация выделения и освобождения)
@@ -509,3 +489,7 @@ make_shared(__in _TPtr* ptr, __inout shared_ptr<_TPtr>& empty_container) noexcep
 
 	return STATUS_SUCCESS;
 }
+
+} // namespace memory
+
+} // namespace ccl

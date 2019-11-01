@@ -1,8 +1,8 @@
 //============================================================================================================
 //	Code wrappers uses to remove dependencies from WDM structures and macroes.
 //============================================================================================================
-#ifndef __KBASIC_H__
-#define __KBASIC_H__
+#ifndef __KBASIC_H_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_
+#define __KBASIC_H_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_
 
 
 // common code library
@@ -43,4 +43,4 @@ inline bool ntsuccess(const NtStatus& st) { return st >= 0; }
 
 } // namespace ccl
 
-#endif // !__KBASIC_H__
+#endif // !_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_
