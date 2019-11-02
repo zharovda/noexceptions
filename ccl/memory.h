@@ -1,9 +1,26 @@
-#pragma once
+//============================================================================================================
+//	memory manipulation wrappers and smart pointer definitions
+//============================================================================================================
+
+#ifndef __MEMORY_H_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_
+#define __MEMORY_H_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_
 
 #include ".\kbasic.h"
+#include ".\asserts.h"
 
 #include ".\traits.h"
 #include ".\utility.h"
+
+#ifdef __KERNEL_MODE
+#include <wdm.h>
+#define ccl_interlocked_increment InterlockedIncrement
+#define ccl_interlocked_decrement InterlockedDecrement
+#else   // __KERNEL_MODE
+#include <intrin0.h>
+#define ccl_interlocked_increment _InterlockedIncrement
+#define ccl_interlocked_decrement _InterlockedDecrement
+#endif  // __KERNEL_MODE
+
 
 namespace ccl
 {
@@ -12,83 +29,50 @@ namespace memory
 {
 
 //============================================================================================================
-//	базовые шаблоны выделения и освобождения памяти 
+//	basic memory managment wrappers
 //============================================================================================================
-
 template<
     typename _T
 >
-void releaser(_T* ptr) {
-    // TODO: еализовать функцию удаления объект
+void 
+__stdcall
+default_releaser(
+    _T* ptr) 
+{
+    assert(nullptr != ptr);
+     
+    delete ptr; // no nullptr check to find logical/sync error faster
+    
 }
 
 //------------------------------------------------------------------------------------------------------------
-//	простой шаблон менеджера памяти (реализация выделения и освобождения)
-//
-//	Примечание: данный шаблон - пример реализации менеджера памяти ресурсов. В простейшем случае используется
-//				new/delete с последующем, после выделения памяти, вызовом функции инициализации объекта 
-//				(placement new) 
-//
+//  basic resource releaser object definition
 //------------------------------------------------------------------------------------------------------------
-template <typename T>
-struct DefaultMemManager
+template <
+    typename _T,
+    void(__stdcall *releaser)(_T*) = default_releaser<_T>
+>
+struct ResourceReleaser
 {
-	DefaultMemManager() = default;
+    ResourceReleaser() = default;
 
-	NTSTATUS allocate(__out T** ptr);
-	void deallocate(__in T* ptr);
-
-
-	using type = T;
+    void deallocate(__in T* ptr) {
+        releaser(ptr);
+    }
+    
+	using type = _T;
 };
 
 
-
-template <typename T>
-NTSTATUS 
-DefaultMemManager<T>::allocate(
-	__out T** ptr)
-{
-	// контракт
-	assert(nullptr != ptr);	
-	assert(nullptr == *ptr);
-
-	// реализация
-	*ptr = static_cast<T*>(new unsigned char[sizeof(T)]);
-	if (nullptr == *ptr) {
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
-
-	return STATUS_SUCCESS;
-}
-
-
-template <typename T>
-void
-DefaultMemManager<T>::deallocate(
-	__in T* ptr)
-{
-	// контракт
-	//assert(nullptr != ptr);
-
-	// реализация
-	if (ptr) 
-	{
-		ptr->~T();
-		delete [] reinterpret_cast<unsigned char*>(ptr);
-	}
-}
-
-
-
 //============================================================================================================
-//	базовый класс счетчика ссылок (виртуальный)
+//  base reference counter class definition
+//  Realisation of smart pointer reference counter should be derived by using this class.
 //
-//	Примечания: 
-//		* weak pointer не предусмотрен
-//		* базовый класс используется для реализации специфического счетчика ссылок
+//  This realisation does not support weak pointers. 
 //============================================================================================================
-class RefCounterBase {
+class RefCounterBase 
+{
+
 public:
 
 	RefCounterBase(RefCounterBase&& other) :
@@ -99,12 +83,12 @@ public:
 	virtual ~RefCounterBase() = default;
 
 	// increment use count
-	void incref() { _InterlockedIncrement(reinterpret_cast<volatile long *>(&uses_)); }
+	void incref() { ccl_interlocked_increment(reinterpret_cast<volatile long *>(&uses_)); }
 
 	// decrement use count
 	void decref() {
 		// destroy managed resource, decrement weak reference count
-		if (_InterlockedDecrement(reinterpret_cast<volatile long *>(&uses_)) == 0) {
+		if (ccl_interlocked_decrement(reinterpret_cast<volatile long *>(&uses_)) == 0) {
 			destroy();
 			delete_this();	//в оригинале нужно уменьшить число ссылок, но в упрощенном виде (без weak pointer) этого достаточно
 		}
@@ -116,25 +100,18 @@ private:
 	virtual void destroy() = 0;
 	virtual void delete_this() = 0;
 
-private:
 	volatile size_t uses_ = 1;
-	//volatile size_t weak_ = 1;	//в данной реализации weak и uses эквивалентны
+	//volatile size_t weak_ = 1;	//as historical reference
 };
 
 
-
 //============================================================================================================
-//	шаблон счетчика ссылок (кастомные менеджеры памяти для счетчика и ресурса)
-//
-//	Примечание: шаблон реализация которого предусматривает использование кастомного менеджера памяти для 
-//				создания и удаления счетчика ссылок. 
-//				
-//
+//  reference counter template with custom memory managers 
 //============================================================================================================
 template<
-	class _Resource,			// тип хранимого объекта
-	class _DxResource,			// класс удаления объекта
-	class _DxCounter>			// класс удаления счетчика ссылок
+	class _TResource,			// resource type which lifecircle is controlled by reference counter
+	class _DxResource,			// resource deleter class
+	class _DxCounter>			// reference counter deleter object
 class RefCounter
 	: public RefCounterBase
 {
@@ -146,12 +123,12 @@ public:
 	
 	RefCounter(RefCounter&& other) : 
 		RefCounterBase(ccl::move(other)),
-		ptr_(ccl::move(other.ptr_)),
 		dx_res_(ccl::move(other.dx_res_)),
-		dx_counter_(ccl::move(other.dx_counter_))
+		dx_counter_(ccl::move(other.dx_counter_)),
+        ptr_(other.ptr_)
 	{}
 
-	explicit RefCounter(_Resource* res_ptr, _DxResource dx_res, _DxCounter dx_counter) :
+	explicit RefCounter(_TResource* res_ptr, _DxResource dx_res, _DxCounter dx_counter) :
 		RefCounterBase(), 
 		dx_res_(ccl::move(dx_res)), 
 		dx_counter_(ccl::move(dx_counter)),
@@ -161,7 +138,7 @@ public:
 	~RefCounter() {}
 
 	// destroy managed resource
-	virtual void destroy() override 
+	void destroy() final 
 	{ 
 		if (ptr_) 
 		{ 
@@ -170,14 +147,14 @@ public:
 		} 
 	}
 
-	virtual void delete_this() override 
+	void delete_this() final 
 	{ 
 		_DxCounter dx(ccl::move(dx_counter_));
 		dx.deallocate(this);
 	}
 
 private:
-	_Resource*	ptr_ = nullptr;
+	_TResource*	ptr_ = nullptr;
 
 	_DxResource dx_res_;
 	_DxCounter  dx_counter_;
@@ -185,27 +162,31 @@ private:
 
 
 //============================================================================================================
-//	шаблон менеджера памяти по умолчанию для создания/удаления счетчика ссылок
-//
+//  reference counter default memory manager template 
 //============================================================================================================
+
+
 template <
 	class _Ty,
 	class _DxResource 
 >
-struct DefaultResCounterMM
+struct DefaultRefCounterMM
 {
-	using TDxCounter = RefCounter<_Ty, _DxResource, DefaultResCounterMM>;
+    using NtStatus = typename ccl::kbasic::NtStatus;
+    using NtStatusVals = typename ccl::kbasic::NtStatusVals;
 
-	DefaultResCounterMM() = default;
+	using TDxCounter = RefCounter<_Ty, _DxResource, DefaultRefCounterMM>;
 
-	NTSTATUS allocate(TDxCounter** ptr)
+	DefaultRefCounterMM() = default;
+    
+    NtStatus allocate(TDxCounter** ptr)
 	{
 		*ptr = reinterpret_cast<TDxCounter*>(new unsigned char[sizeof(TDxCounter)]);
 		if (nullptr == *ptr) {
-			return STATUS_INSUFFICIENT_RESOURCES;
+			return ccl::kbasic::status(NtStatusVals::NtStatusInsufficientResources);
 		}
 
-		return STATUS_SUCCESS;
+		return ccl::kbasic::status(NtStatusVals::NtStatusSuccess);
 	}
 
 	void deallocate(TDxCounter* ptr)
@@ -217,23 +198,20 @@ struct DefaultResCounterMM
 			delete[] real_ptr;
 		}
 	}
-
-	using type = TDxCounter;
 };
 
 
 
 //============================================================================================================
-//	шаблон базового указателя с контролирующим блоком (счетчик ссылок)
+//	base pointer template, and shared_ptr forward declaration
 //============================================================================================================
-template<class _Ty>
-class shared_ptr;
+template<class _Ty> class shared_ptr;
 
 
 template<class _Ty>
 class _Ptr_base
 {	
-	using element_type = std::remove_extent_t<_Ty>;
+	using element_type = ccl::remove_extent_t<_Ty>;
 	using ref_counter_type = RefCounterBase;
 
 public:
@@ -259,7 +237,6 @@ protected:
 	template<class _Ty2>
 	void _Move_construct_from(_Ptr_base<_Ty2>&& _Right)
 	{	// implement shared_ptr's (converting) move ctor and weak_ptr's move ctor
-		// метод ТОЛЬКО для конструкторов
 		_Ptr = _Right._Ptr;
 		_Rep = _Right._Rep;
 
@@ -270,9 +247,7 @@ protected:
 	template<class _Ty2>
 	void _Copy_construct_from(const shared_ptr<_Ty2>& _Other)
 	{	// implement shared_ptr's (converting) copy ctor
-		// метод ТОЛЬКО для конструкторов
-		if (_Other._Rep)
-		{
+		if (_Other._Rep){
 			_Other._Rep->incref();
 		}
 
@@ -282,8 +257,7 @@ protected:
 
 	void _Decref()
 	{	// decrement reference count
-		if (_Rep)
-		{
+		if (_Rep){
 			_Rep->decref();
 		}
 	}
@@ -309,14 +283,14 @@ private:
 
 
 //============================================================================================================
-//	служебная функция создания и инициализации счетчика ссылок
+//	template function that creates and initialize reference counter for resource
 //============================================================================================================
 template<
 	class _Ty,
-	class _TyDeleter,	// класс реализующий функцию удаления ресурса 
-	class _MmCounter	// класс создания и удаления простого счетчика 
+	class _TyDeleter,	// resource deleter
+	class _MmCounter	// reference counter deleter
 >
-NTSTATUS
+ccl::kbasic::NtStatus
 _init(
 	__in  _Ty* ptr,
 	__in  _TyDeleter res_dtor,
@@ -325,12 +299,11 @@ _init(
 {
 	using counter_mm_type = _MmCounter;
 	using counter_type = typename counter_mm_type::type;
-	using res_deleter_type = _TyDeleter;
 
 	counter_type* p_counter = nullptr;
 
-	NTSTATUS st = counter_mm.allocate(&p_counter);
-	if (!NT_SUCCESS(st)) {
+    ccl::kbasic::NtStatus st = counter_mm.allocate(&p_counter);
+	if (!ccl::kbasic::ntsuccess(st)) {
 		return st;
 	}
 
@@ -343,7 +316,7 @@ _init(
 }
 
 //============================================================================================================
-//	шаблон shared_ptr
+//	shared_ptr
 //============================================================================================================
 template<
 	class _Ty
@@ -357,19 +330,17 @@ private:
 	using res_type_pointer = res_type*;
 
 	using _Mybase = _Ptr_base<res_type>;
-
-	typedef void(__stdcall * TOwnedObjectReleaser)(res_type_pointer);
-
    
 public:
 
+    // shared_ptr class friend function for initialization and check it result without exceptions
 	template<
 		class _TPtr,
-		class _MmTy,
-		class _MmCounter 	// класс создания и удаления простого счетчика 
+		class _TyDeleter,   // resource deleter
+		class _MmCounter 	// reference counter
 	>
 	friend
-	NTSTATUS
+    ccl::kbasic::NtStatus
 		make_shared(__in _TPtr* ptr, __inout shared_ptr<_TPtr>& empty_container) noexcept;
 	
 
@@ -419,7 +390,7 @@ public:
 	}
 
 	template<class _Ty2 = _Ty>
-	_NODISCARD _Ty2& operator*() const noexcept
+	_Ty2& operator*() const noexcept
 	{	// return reference to resource
 		return (*get());
 	}
@@ -468,28 +439,35 @@ private:
 
 template<
 	class _TPtr,
-	class _MmTy = DefaultMemManager<_TPtr>,
-	class _MmCounter = DefaultResCounterMM<_TPtr, _MmTy> 	// класс создания и удаления простого счетчика 
+	class _TyDeleter = ResourceReleaser<_TPtr>,
+	class _MmCounter = DefaultRefCounterMM<_TPtr, _TyDeleter> 	// класс создания и удаления простого счетчика 
 >
-NTSTATUS
+ccl::kbasic::NtStatus
 make_shared(__in _TPtr* ptr, __inout shared_ptr<_TPtr>& empty_container) noexcept
 {
-	NTSTATUS st = STATUS_UNSUCCESSFUL;
+    using ccl::kbasic::status;
+    using ccl::kbasic::ntsuccess;
+    using ccl::kbasic::NtStatus;
+    using ccl::kbasic::NtStatusVals;
 
-	_MmTy res_dtor;
+    NtStatus st = status(NtStatusVals::NtStatusInvalidParameter);
+
+    _TyDeleter res_dtor;
 	_MmCounter counter_mm;
 	typename _MmCounter::type* counter_obj = nullptr;
 
-	st = _init<_TPtr, _MmTy, _MmCounter>(ptr, ccl::move(res_dtor), ccl::move(counter_mm), &counter_obj);
-	if (!NT_SUCCESS(st)) {
+	st = _init<_TPtr, _TyDeleter, _MmCounter>(ptr, ccl::move(res_dtor), ccl::move(counter_mm), &counter_obj);
+	if (!ntsuccess(st)) {
 		return st;
 	}
 
 	empty_container._setpd(ptr, counter_obj);
-
-	return STATUS_SUCCESS;
+	return st;
 }
 
 } // namespace memory
 
 } // namespace ccl
+
+
+#endif // __MEMORY_H_AF36F6FA_1D5A_4D82_8F95_EB1CA596679A_

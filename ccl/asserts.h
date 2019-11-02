@@ -12,8 +12,25 @@ namespace asserts
 
 #ifdef __KERNEL_MODE
 
-#else __KERNEL_MODE
+//------------------------------------------------------------------------------------------------------------
+//  assert macro definition for kernel mode 
+//------------------------------------------------------------------------------------------------------------
+#ifndef assert
+#ifdef DBG
+#define assert(expression) \
+    ((!(exp)) ? \
+        (RtlAssert( (PVOID)#expression, (PVOID)__FILE__, __LINE__, NULL ),FALSE) : \
+        TRUE)
+#else // DBG
+#define assert(expression) ((void)0)
+#endif // DBG
+#endif // assert
 
+#else // __KERNEL_MODE
+//------------------------------------------------------------------------------------------------------------
+//  for user mode include assert.h is enought
+//------------------------------------------------------------------------------------------------------------
+#include <assert.h>
 #endif // __KERNEL_MODE
 
 } // namespace asserts
