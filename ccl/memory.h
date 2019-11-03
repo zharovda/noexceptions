@@ -8,7 +8,6 @@
 #include ".\kbasic.h"
 #include ".\asserts.h"
 
-#include ".\traits.h"
 #include ".\utility.h"
 
 #ifdef __KERNEL_MODE
@@ -47,8 +46,12 @@ struct _default_allocator
 {
     constexpr _default_allocator() noexcept = default;
 
-    _Tx* operator()() const noexcept { // delete a pointer
+    _Tx* operator()() const noexcept { 
         return new _Tx();
+    }
+
+    _Tx* operator()(size_t num) const noexcept { 
+        return new _Tx[num];
     }
 
     using type = _Tx;
@@ -58,16 +61,26 @@ struct _default_allocator
 template <
     typename _Tx
 >
-struct _default_deleter
+class _default_deleter
 {
+public:
     constexpr _default_deleter() noexcept = default;
 
     void operator()(_Tx* _Ptr) const noexcept { // delete a pointer
         static_assert(0 < sizeof(_Tx), "can't delete an incomplete type");
-        delete _Ptr;
+        free(ptr, is_array<_Tx>{});
     }
 
     using type = _Tx;
+
+private:
+    template<typename _Ty = _Tx> void free(_Ty* ptr, false_type) {
+        delete ptr;
+    }
+
+    template<typename _Ty = _Tx> void free(_Ty* ptr, true_type) {
+        delete [] ptr;
+    }
 };
 } // namespace regular
 
@@ -81,8 +94,18 @@ struct _default_allocator
 {
     constexpr _default_allocator() noexcept = default;
 
-    _Tx* operator()() const noexcept { // delete a pointer
+    _Tx* operator()() const noexcept { 
         return reinterpret_cast<_Tx*>(new unsigned char[sizeof(_Tx)]);
+    }
+
+    _Tx* operator()(size_t num) const noexcept 
+    { 
+        assert(num > 0);
+
+        size_t total_size = num * sizeof(_Tx);
+        assert(total_size >= num && total_size >= sizeof(_Tx));
+        
+        return reinterpret_cast<_Tx*>(new unsigned char[total_size]);
     }
 
     using type = _Tx;
@@ -92,18 +115,31 @@ struct _default_allocator
 template <
     typename _Tx
 >
-struct _default_deleter
+class _default_deleter
 {
     constexpr _default_deleter() noexcept = default;
 
-    void operator()(_Tx* _Ptr) const noexcept { // delete a pointer
+    void operator()(_Tx* ptr) const noexcept { // delete a pointer
         static_assert(0 < sizeof(_Tx), "can't delete an incomplete type");
-
-        _Ptr->~_Tx();
-        delete[] reinterpret_cast<unsigned char*>(_Ptr);
+        free(ptr, is_array<_Tx>{});
     }
 
     using type = _Tx;
+
+private:
+
+    template<typename _Ty = _Tx> void free(_Ty* ptr, false_type) 
+    {
+        ptr->~_Tx();
+        delete[] reinterpret_cast<unsigned char*>(ptr);
+    }
+
+    template<typename _Ty = _Tx> void free(_Ty* ptr, true_type) {
+        static_assert(true, "This class does not support deleter for objects array!!");
+        assert(false);
+        *reinterpret_cast<_Ty*>(nullptr) = 42; // runtime garanted bug!
+    }
+
 };
 } // namespace placement 
 
@@ -137,7 +173,7 @@ public:
 		// destroy managed resource, decrement weak reference count
 		if (ccl_interlocked_decrement(reinterpret_cast<volatile long *>(&uses_)) == 0) {
 			destroy();
-			delete_this();	//в оригинале нужно уменьшить число ссылок, но в упрощенном виде (без weak pointer) этого достаточно
+			delete_this();	//Without weak pointers we should destroy reference counter if resource is already destroed.
 		}
 	}
 
