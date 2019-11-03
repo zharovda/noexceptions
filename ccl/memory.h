@@ -27,41 +27,88 @@ namespace ccl
 
 namespace memory
 {
-
+    
 //============================================================================================================
 //	basic memory managment wrappers
 //============================================================================================================
-template<
-    typename _T
->
-void 
-__stdcall
-default_releaser(
-    _T* ptr) 
-{
-    assert(nullptr != ptr);
-     
-    delete ptr; // no nullptr check to find logical/sync error faster
-    
-}
+
 
 //------------------------------------------------------------------------------------------------------------
-//  basic resource releaser object definition
+//  default allocators/deleters
 //------------------------------------------------------------------------------------------------------------
+namespace mm
+{
+namespace regular
+{
 template <
-    typename _T,
-    void(__stdcall *releaser)(_T*) = default_releaser<_T>
+    typename _Tx
 >
-struct ResourceReleaser
+struct _default_allocator
 {
-    ResourceReleaser() = default;
+    constexpr _default_allocator() noexcept = default;
 
-    void deallocate(__in T* ptr) {
-        releaser(ptr);
+    _Tx* operator()() const noexcept { // delete a pointer
+        return new _Tx();
     }
-    
-	using type = _T;
+
+    using type = _Tx;
 };
+
+
+template <
+    typename _Tx
+>
+struct _default_deleter
+{
+    constexpr _default_deleter() noexcept = default;
+
+    void operator()(_Tx* _Ptr) const noexcept { // delete a pointer
+        static_assert(0 < sizeof(_Tx), "can't delete an incomplete type");
+        delete _Ptr;
+    }
+
+    using type = _Tx;
+};
+} // namespace regular
+
+
+namespace placement 
+{
+template <
+    typename _Tx
+>
+struct _default_allocator
+{
+    constexpr _default_allocator() noexcept = default;
+
+    _Tx* operator()() const noexcept { // delete a pointer
+        return reinterpret_cast<_Tx*>(new unsigned char[sizeof(_Tx)]);
+    }
+
+    using type = _Tx;
+};
+
+
+template <
+    typename _Tx
+>
+struct _default_deleter
+{
+    constexpr _default_deleter() noexcept = default;
+
+    void operator()(_Tx* _Ptr) const noexcept { // delete a pointer
+        static_assert(0 < sizeof(_Tx), "can't delete an incomplete type");
+
+        _Ptr->~_Tx();
+        delete[] reinterpret_cast<unsigned char*>(_Ptr);
+    }
+
+    using type = _Tx;
+};
+} // namespace placement 
+
+} // namespace mm
+
 
 
 //============================================================================================================
@@ -142,7 +189,7 @@ public:
 	{ 
 		if (ptr_) 
 		{ 
-			dx_res_.deallocate(ptr_);
+			dx_res_()(ptr_);
 			ptr_ = nullptr;
 		} 
 	}
@@ -150,7 +197,7 @@ public:
 	void delete_this() final 
 	{ 
 		_DxCounter dx(ccl::move(dx_counter_));
-		dx.deallocate(this);
+		dx(this);
 	}
 
 private:
@@ -158,46 +205,6 @@ private:
 
 	_DxResource dx_res_;
 	_DxCounter  dx_counter_;
-};
-
-
-//============================================================================================================
-//  reference counter default memory manager template 
-//============================================================================================================
-
-
-template <
-	class _Ty,
-	class _DxResource 
->
-struct DefaultRefCounterMM
-{
-    using NtStatus = typename ccl::kbasic::NtStatus;
-    using NtStatusVals = typename ccl::kbasic::NtStatusVals;
-
-	using TDxCounter = RefCounter<_Ty, _DxResource, DefaultRefCounterMM>;
-
-	DefaultRefCounterMM() = default;
-    
-    NtStatus allocate(TDxCounter** ptr)
-	{
-		*ptr = reinterpret_cast<TDxCounter*>(new unsigned char[sizeof(TDxCounter)]);
-		if (nullptr == *ptr) {
-			return ccl::kbasic::status(NtStatusVals::NtStatusInsufficientResources);
-		}
-
-		return ccl::kbasic::status(NtStatusVals::NtStatusSuccess);
-	}
-
-	void deallocate(TDxCounter* ptr)
-	{
-		ptr->~TDxCounter();
-
-		unsigned char* real_ptr = reinterpret_cast<unsigned char*>(ptr);
-		if (nullptr != real_ptr) {
-			delete[] real_ptr;
-		}
-	}
 };
 
 
@@ -286,33 +293,37 @@ private:
 //	template function that creates and initialize reference counter for resource
 //============================================================================================================
 template<
-	class _Ty,
-	class _TyDeleter,	// resource deleter
-	class _MmCounter	// reference counter deleter
+    class _Ty,
+    class _TyDeleter,	    // resource deleter
+    class _AlRefCounter,	// reference counter allocator
+    class _DlRefCounter,	// reference counter deleter
 >
 ccl::kbasic::NtStatus
 _init(
-	__in  _Ty* ptr,
-	__in  _TyDeleter res_dtor,
-	__in  _MmCounter counter_mm,
-	__out typename _MmCounter::type** ppcounter)
+    __in  _Ty* ptr,
+    __in  _TyDeleter res_dtor,
+    __out typename _DlRefCounter::type** ppcounter)
 {
-	using counter_mm_type = _MmCounter;
-	using counter_type = typename counter_mm_type::type;
+    using counter_al_type = _AlRefCounter;
+    using counter_dl_type = _DlRefCounter;
+    using counter_type = typename _DlRefCounter::type;
 
-	counter_type* p_counter = nullptr;
+    using NtStatusVals = typename ccl::kbasic::NtStatusVals;
+    
 
-    ccl::kbasic::NtStatus st = counter_mm.allocate(&p_counter);
-	if (!ccl::kbasic::ntsuccess(st)) {
-		return st;
-	}
+    counter_al_type al;
+    counter_type* p_counter = al();
+    if (nullptr == p_counter) {
+        return ccl::kbasic::status(NtStatusVals::NtStatusInsufficientResources);
+    }
 
-	new (p_counter) counter_type(ptr, ccl::move(res_dtor), ccl::move(counter_mm));
+    counter_dl_type dx_counter;
+    new (p_counter) counter_type(ptr, ccl::move(res_dtor), ccl::move(dx_counter));
 
-	*ppcounter = p_counter;
-	p_counter = nullptr;
+    *ppcounter = p_counter;
+    p_counter = nullptr;
 
-	return st;
+    return ccl::kbasic::status(NtStatusVals::NtStatusSuccess);
 }
 
 //============================================================================================================
@@ -334,15 +345,10 @@ private:
 public:
 
     // shared_ptr class friend function for initialization and check it result without exceptions
-	template<
-		class _TPtr,
-		class _TyDeleter,   // resource deleter
-		class _MmCounter 	// reference counter
-	>
-	friend
+    template<class _Tx, class _TyDeleter, class _AlRefCounter, class _DlRefCounter>
+    friend
     ccl::kbasic::NtStatus
-		make_shared(__in _TPtr* ptr, __inout shared_ptr<_TPtr>& empty_container) noexcept;
-	
+        make_shared(__in _Tx* ptr, __inout shared_ptr<_Tx>& empty_container) noexcept;
 
 
 	constexpr shared_ptr() noexcept
@@ -437,32 +443,36 @@ private:
 
 
 
+
 template<
-	class _TPtr,
-	class _TyDeleter = ResourceReleaser<_TPtr>,
-	class _MmCounter = DefaultRefCounterMM<_TPtr, _TyDeleter> 	// класс создания и удаления простого счетчика 
+    class _Tx,
+    class _TyDeleter = mm::regular::_default_deleter<_Tx>,
+    class _AlRefCounter = mm::regular::_default_deleter<_Tx>,	// reference counter allocator
+    class _DlRefCounter = mm::regular::_default_deleter<_Tx>	// reference counter deleter
 >
 ccl::kbasic::NtStatus
-make_shared(__in _TPtr* ptr, __inout shared_ptr<_TPtr>& empty_container) noexcept
+make_shared(__in _Tx* ptr, __inout shared_ptr<_Tx>& empty_container) noexcept
 {
     using ccl::kbasic::status;
     using ccl::kbasic::ntsuccess;
     using ccl::kbasic::NtStatus;
     using ccl::kbasic::NtStatusVals;
 
+    using ref_counter_del_t = typename _DlRefCounter::type;
+
     NtStatus st = status(NtStatusVals::NtStatusInvalidParameter);
 
     _TyDeleter res_dtor;
-	_MmCounter counter_mm;
-	typename _MmCounter::type* counter_obj = nullptr;
 
-	st = _init<_TPtr, _TyDeleter, _MmCounter>(ptr, ccl::move(res_dtor), ccl::move(counter_mm), &counter_obj);
-	if (!ntsuccess(st)) {
-		return st;
-	}
+    ref_counter_del_t* counter_obj = nullptr;
 
-	empty_container._setpd(ptr, counter_obj);
-	return st;
+    st = _init<_Tx, _TyDeleter, _AlRefCounter, _DlRefCounter>(ptr, ccl::move(res_dtor), &counter_obj);
+    if (!ntsuccess(st)) {
+        return st;
+    }
+
+    empty_container._setpd(ptr, counter_obj);
+    return st;
 }
 
 } // namespace memory
