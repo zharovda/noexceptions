@@ -3,3 +3,6 @@
 ################################################################################
 
 /.vs
+/test_prjs/TstCcl0/.vs/TstCcl0/v16
+/test_prjs/TstCcl0/out
+/test_prjs/TstCcl0/temp

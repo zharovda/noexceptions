@@ -16,27 +16,23 @@ namespace kbasic
 // ntstatus.h values equivalents
 enum class NtStatusVals : long	
 {
-	NtStatusSuccess =               0x00000000L,    // STATUS_SUCCESS
-	NtStatusUnsuccessful =          0xC0000001L,    // STATUS_UNSUCCESSFUL
-	NtStatusInvalidParameter =      0xC000000DL,    // STATUS_INVALID_PARAMETER
-	NtStatusInsufficientResources = 0xC000009AL     // STATUS_INSUFFICIENT_RESOURCES
+	NtStatusSuccess =               ((long)0x00000000L),    // STATUS_SUCCESS
+	NtStatusUnsuccessful =          ((long)0xC0000001L),    // STATUS_UNSUCCESSFUL
+	NtStatusInvalidParameter =      ((long)0xC000000DL),    // STATUS_INVALID_PARAMETER
+	NtStatusInsufficientResources = ((long)0xC000009AL)     // STATUS_INSUFFICIENT_RESOURCES
 };
 
 
 // native status code type definition using preprocessor 
-#ifndef __KERNEL_MODE
 using NtStatus = long;
-#else	// __KERNEL_MODE
-using NtStatus = NTSTATUS;
-#endif  // __KERNEL_MODE
 
 
 // status value conversion to native error value
-constexpr NtStatus status(NtStatusVals st) { return static_cast<NtStatus>(st); }
+constexpr NtStatus status(const NtStatusVals& st) { return static_cast<NtStatus>(st); }
 
 
 // status code check 
-inline bool ntsuccess(const NtStatus& st) { return st >= 0; }
+inline bool ntsuccess(const NtStatus& st) noexcept { return st >= 0; }
 
 
 } // namespace kbasic 

@@ -42,7 +42,7 @@ namespace regular
 template <
     typename _Tx
 >
-struct _default_allocator
+struct _default_allocator final
 {
     constexpr _default_allocator() noexcept = default;
 
@@ -61,7 +61,7 @@ struct _default_allocator
 template <
     typename _Tx
 >
-class _default_deleter
+class _default_deleter final
 {
 public:
     constexpr _default_deleter() noexcept = default;
@@ -90,7 +90,7 @@ namespace placement
 template <
     typename _Tx
 >
-struct _default_allocator
+struct _default_allocator final
 {
     constexpr _default_allocator() noexcept = default;
 
@@ -115,7 +115,7 @@ struct _default_allocator
 template <
     typename _Tx
 >
-class _default_deleter
+class _default_deleter final 
 {
     constexpr _default_deleter() noexcept = default;
 
@@ -155,35 +155,41 @@ private:
 //============================================================================================================
 class RefCounterBase 
 {
+    RefCounterBase(const RefCounterBase&) noexcept = delete;
+    RefCounterBase& operator=(const RefCounterBase&) noexcept = delete;
+    RefCounterBase& operator=(RefCounterBase&&) noexcept = delete;
 
 public:
 
-	RefCounterBase(RefCounterBase&& other) :
-		uses_(ccl::move(other.uses_))
+	RefCounterBase(RefCounterBase&& other) noexcept :
+		uses_(ccl::move(other.uses_)) 
 	{}
 
 	RefCounterBase() = default;
-	virtual ~RefCounterBase() = default;
+	virtual ~RefCounterBase() noexcept = default;
 
 	// increment use count
-	void incref() { ccl_interlocked_increment(reinterpret_cast<volatile long *>(&uses_)); }
+	void incref() noexcept   { 
+        ccl_interlocked_increment(&uses_);
+    }
 
 	// decrement use count
-	void decref() {
+	void decref() noexcept {
 		// destroy managed resource, decrement weak reference count
-		if (ccl_interlocked_decrement(reinterpret_cast<volatile long *>(&uses_)) == 0) {
+
+		if (ccl_interlocked_decrement(&uses_) == 0) {
 			destroy();
 			delete_this();	//Without weak pointers we should destroy reference counter if resource is already destroed.
 		}
 	}
 
-	size_t use_count() { return uses_; }
+	long use_count() const noexcept { return uses_; }
 
 private:
-	virtual void destroy() = 0;
-	virtual void delete_this() = 0;
+	virtual void destroy() noexcept = 0;
+	virtual void delete_this() noexcept = 0;
 
-	volatile size_t uses_ = 1;
+	volatile long uses_ = 1;
 	//volatile size_t weak_ = 1;	//as historical reference
 };
 
@@ -195,7 +201,7 @@ template<
 	class _TResource,			// resource type which lifecircle is controlled by reference counter
 	class _DxResource,			// resource deleter class
 	class _DxCounter>			// reference counter deleter object
-class RefCounter
+class RefCounter final
 	: public RefCounterBase
 {
 	RefCounter() = delete;
@@ -221,7 +227,7 @@ public:
 	~RefCounter() {}
 
 	// destroy managed resource
-	void destroy() final 
+	void destroy() noexcept final 
 	{ 
 		if (ptr_) 
 		{ 
@@ -230,7 +236,7 @@ public:
 		} 
 	}
 
-	void delete_this() final 
+	void delete_this() noexcept final 
 	{ 
 		_DxCounter dx(ccl::move(dx_counter_));
 		dx(this);
@@ -259,7 +265,7 @@ class _Ptr_base
 
 public:
 
-	size_t use_count() const noexcept
+	long use_count() const noexcept
 	{	// return use count
 		return (_Rep ? _Rep->use_count() : 0);
 	}
@@ -298,7 +304,7 @@ protected:
 		_Rep = _Other._Rep;
 	}
 
-	void _Decref()
+	void _Decref() noexcept
 	{	// decrement reference count
 		if (_Rep){
 			_Rep->decref();
@@ -332,7 +338,7 @@ template<
     class _Ty,
     class _TyDeleter,	    // resource deleter
     class _AlRefCounter,	// reference counter allocator
-    class _DlRefCounter,	// reference counter deleter
+    class _DlRefCounter 	// reference counter deleter
 >
 ccl::kbasic::NtStatus
 _init(
@@ -368,7 +374,7 @@ _init(
 template<
 	class _Ty
 >					
-class shared_ptr
+class shared_ptr final
 	: public _Ptr_base<_Ty>
 {	// class for reference counted resource management
 private:
@@ -380,20 +386,18 @@ private:
    
 public:
 
-    // shared_ptr class friend function for initialization and check it result without exceptions
-    template<class _Tx, class _TyDeleter, class _AlRefCounter, class _DlRefCounter>
-    friend
-    ccl::kbasic::NtStatus
-        make_shared(__in _Tx* ptr, __inout shared_ptr<_Tx>& empty_container) noexcept;
 
+    constexpr shared_ptr(ccl::nullptr_t) noexcept {} // construct empty shared_ptr
 
 	constexpr shared_ptr() noexcept
 	{	// construct empty shared_ptr
 	}
 
-	constexpr shared_ptr(nullptr_t) noexcept
-	{	// construct empty shared_ptr
-	}
+    // shared_ptr class friend function for initialization and check it result without exceptions
+    template<class _Tx, class _TyDeleter, class _AlRefCounter, class _DlRefCounter>
+    friend
+        ccl::kbasic::NtStatus
+        make_shared(__in _Tx* ptr, __inout shared_ptr<_Tx>& empty_container) noexcept;
 
 
 	shared_ptr(const shared_ptr& _Other) noexcept
@@ -453,12 +457,12 @@ public:
 
 
 	template<class _Ty2 = _Ty>
-	_NODISCARD _Ty2 * operator->() const noexcept
+	_Ty2 * operator->() const noexcept
 	{	// return pointer to resource
 		return (get());
 	}
 
-	_NODISCARD bool unique() const noexcept
+	bool unique() const noexcept
 	{	// return true if no other shared_ptr object owns this resource
 		return (this->use_count() == 1);
 	}

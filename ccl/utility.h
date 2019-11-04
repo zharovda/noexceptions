@@ -14,10 +14,12 @@ namespace ccl
 // templates copied as-is from std (_NODISCARD - removed)
 //------------------------------------------------------------------------------------------------------------
 
+#pragma warning(disable : 26487)
 template <class _Ty>
-constexpr remove_reference_t<_Ty>&& move(_Ty&& _Arg) noexcept { // forward _Arg as movable
+_NODISCARD constexpr remove_reference_t<_Ty>&& move(_Ty&& _Arg) noexcept { // forward _Arg as movable
     return static_cast<remove_reference_t<_Ty>&&>(_Arg);
 }
+#pragma warning(default : 26487)
 
 template <class _Ty, class>
 void swap(_Ty& _Left, _Ty& _Right) noexcept 

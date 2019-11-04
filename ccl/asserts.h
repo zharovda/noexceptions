@@ -17,9 +17,9 @@ namespace asserts
 //------------------------------------------------------------------------------------------------------------
 #ifndef assert
 #ifdef DBG
-#define assert(expression) \
+#define assert(exp) \
     ((!(exp)) ? \
-        (RtlAssert( (PVOID)#expression, (PVOID)__FILE__, __LINE__, NULL ),FALSE) : \
+        (RtlAssert( (PVOID)#exp, (PVOID)__FILE__, __LINE__, nullptr ),FALSE) : \
         TRUE)
 #else // DBG
 #define assert(expression) ((void)0)
